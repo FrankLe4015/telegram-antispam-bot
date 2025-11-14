@@ -128,19 +128,24 @@ class AntiSpamBot:
 bot_instance = AntiSpamBot()
 
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """Check if user is group admin"""
+    """Check if user is group admin or in private chat"""
     try:
         chat_id = update.effective_chat.id
+        
+        # Allow all operations in private chat
+        if update.effective_chat.type == 'private':
+            return True
+            
         cache_key = f"{chat_id}_{user_id}"
         current_time = asyncio.get_event_loop().time()
         
-        # Check cache
+        # Check cache for group chats
         if cache_key in admin_cache:
             cache_time, is_admin_cached = admin_cache[cache_key]
             if current_time - cache_time < CACHE_DURATION:
                 return is_admin_cached
         
-        # Get user permissions
+        # Get user permissions in group
         member = await context.bot.get_chat_member(chat_id, user_id)
         is_admin_result = member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
         
