@@ -8,6 +8,22 @@ import time
 import threading
 from datetime import datetime
 
+# Fix imghdr import issue
+try:
+    import imghdr
+except ImportError:
+    import warnings
+    warnings.filterwarnings('ignore')
+    
+    # Create a dummy imghdr module
+    class DummyImghdr:
+        def what(self, file_path, h=None):
+            """Dummy implementation that returns None"""
+            return None
+    
+    import sys
+    sys.modules['imghdr'] = DummyImghdr()
+
 from telegram import Update, ChatMember
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
