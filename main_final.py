@@ -8,7 +8,6 @@ import time
 import threading
 from datetime import datetime
 
-# 使用稳定的旧版本API
 from telegram import Update, ChatMember
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 # 关键词数据文件
 KEYWORDS_FILE = 'keywords.json'
 
-# 管理员缓存（5分钟有效期）
+# 管理员缓存
 admin_cache = {}
 CACHE_DURATION = 300
 
@@ -39,12 +38,11 @@ class AntiSpamBot:
         except Exception as e:
             logger.error(f"加载关键词文件失败: {e}")
         
-        # 默认关键词
         return {
             "gambling": [
-                "赌博", "博彩", "百家乐", "德州扑克", "老虎机", "骰宝",
+                "赌博", "博彩", "百家乐", "德州扑克", "老虎机", 
                 "充值", "提现", "返水", "洗码", "上分", "下分",
-                "AG亚游", "BBIN", "沙巴", "皇冠", "永利", "威尼斯",
+                "AG亚游", "BBIN", "沙巴", "皇冠", "永利",
                 "一夜暴富", "稳赚不赔", "日赚千元", "网投", "网赌",
             ],
             "adult": [
@@ -107,8 +105,8 @@ class AntiSpamBot:
 # 创建全局bot实例
 bot_instance = AntiSpamBot()
 
-def is_admin(update: Update, user_id: int) -> bool:
-    """检查用户是否为群组管理员（带缓存）"""
+def is_admin(update, user_id):
+    """检查用户是否为群组管理员"""
     try:
         chat_id = update.effective_chat.id
         cache_key = f"{chat_id}_{user_id}"
@@ -135,14 +133,14 @@ def is_admin(update: Update, user_id: int) -> bool:
 
 def admin_required(func):
     """管理员权限装饰器"""
-    def wrapper(update: Update, context: CallbackContext):
+    def wrapper(update, context):
         if is_admin(update, update.effective_user.id):
             return func(update, context)
         else:
             update.message.reply_text("❌ 此命令仅限群组管理员使用")
     return wrapper
 
-def start(update: Update, context: CallbackContext):
+def start(update, context):
     """启动命令"""
     welcome_text = """🤖 反垃圾机器人已启动！
 
@@ -162,7 +160,7 @@ def start(update: Update, context: CallbackContext):
     update.message.reply_text(welcome_text)
 
 @admin_required
-def add_keyword_command(update: Update, context: CallbackContext):
+def add_keyword_command(update, context):
     """添加关键词命令"""
     if not context.args:
         update.message.reply_text("❌ 请提供要添加的关键词\n用法: /add <关键词>")
@@ -175,7 +173,7 @@ def add_keyword_command(update: Update, context: CallbackContext):
         update.message.reply_text(f"❌ 关键词已存在: {keyword}")
 
 @admin_required  
-def delete_keyword_command(update: Update, context: CallbackContext):
+def delete_keyword_command(update, context):
     """删除关键词命令"""
     if not context.args:
         update.message.reply_text("❌ 请提供要删除的关键词\n用法: /delete <关键词>")
@@ -188,7 +186,7 @@ def delete_keyword_command(update: Update, context: CallbackContext):
         update.message.reply_text(f"❌ 未找到关键词: {keyword}")
 
 @admin_required
-def list_keywords_command(update: Update, context: CallbackContext):
+def list_keywords_command(update, context):
     """列出所有关键词命令"""
     keywords_data = bot_instance.keywords_data
     
@@ -207,20 +205,20 @@ def list_keywords_command(update: Update, context: CallbackContext):
             }.get(category, f"📂 {category}")
             
             message_parts.append(f"\n{category_name}:")
-            for i, keyword in enumerate(keywords[:10], 1):  # 限制显示前10个
+            for i, keyword in enumerate(keywords[:10], 1):
                 message_parts.append(f"{i}. {keyword}")
             
             if len(keywords) > 10:
                 message_parts.append(f"... 还有{len(keywords) - 10}个关键词")
     
     response = '\n'.join(message_parts)
-    if len(response) > 4000:  # Telegram消息长度限制
+    if len(response) > 4000:
         response = response[:4000] + "\n\n... (消息过长，已截断)"
     
     update.message.reply_text(response)
 
 @admin_required
-def stats_command(update: Update, context: CallbackContext):
+def stats_command(update, context):
     """统计信息命令"""
     keywords_data = bot_instance.keywords_data
     total_keywords = sum(len(keywords) for keywords in keywords_data.values())
@@ -237,7 +235,7 @@ def stats_command(update: Update, context: CallbackContext):
     
     update.message.reply_text(stats_text)
 
-def message_handler(update: Update, context: CallbackContext):
+def message_handler(update, context):
     """消息处理器 - 检查垃圾信息"""
     if not update.message or not update.message.text:
         return
@@ -254,7 +252,7 @@ def message_handler(update: Update, context: CallbackContext):
             # 删除垃圾消息
             update.message.delete()
             
-            # 发送通知（可选）
+            # 发送通知
             chat = update.effective_chat
             warning_msg = chat.send_message(f"🗑️ 已删除垃圾信息 (匹配: {matched_keyword})")
             
@@ -273,20 +271,17 @@ def message_handler(update: Update, context: CallbackContext):
         except Exception as e:
             logger.error(f"删除消息失败: {e}")
 
-def health_check(update: Update, context: CallbackContext):
+def health_check(update, context):
     """健康检查端点"""
     update.message.reply_text("🟢 Bot运行正常")
 
 def main():
     """主函数"""
-    # 获取Bot Token
     token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not token:
         logger.error("未找到TELEGRAM_BOT_TOKEN环境变量")
-        logger.error("请在Render环境变量中设置TELEGRAM_BOT_TOKEN")
         return
     
-    # 创建Updater
     try:
         updater = Updater(token=token, use_context=True)
         dispatcher = updater.dispatcher
@@ -299,13 +294,12 @@ def main():
         dispatcher.add_handler(CommandHandler("stats", stats_command))
         dispatcher.add_handler(CommandHandler("health", health_check))
         
-        # 添加消息处理器（仅群组消息）
+        # 添加消息处理器
         dispatcher.add_handler(MessageHandler(
             Filters.text & Filters.chat_type.groups,
             message_handler
         ))
         
-        # 启动Bot
         logger.info("🤖 反垃圾机器人启动成功!")
         logger.info(f"📝 当前关键词总数: {sum(len(keywords) for keywords in bot_instance.keywords_data.values())}")
         
