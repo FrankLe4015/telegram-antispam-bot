@@ -4,28 +4,11 @@
 import os
 import json
 import logging
-import time
-import threading
+import asyncio
 from datetime import datetime
-
-# Fix imghdr import issue
-try:
-    import imghdr
-except ImportError:
-    import warnings
-    warnings.filterwarnings('ignore')
-    
-    # Create a dummy imghdr module
-    class DummyImghdr:
-        def what(self, file_path, h=None):
-            """Dummy implementation that returns None"""
-            return None
-    
-    import sys
-    sys.modules['imghdr'] = DummyImghdr()
-
-from telegram import Update, ChatMember
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ChatMemberStatus
 
 # Configure logging
 logging.basicConfig(
@@ -121,12 +104,12 @@ class AntiSpamBot:
 # Create global bot instance
 bot_instance = AntiSpamBot()
 
-def is_admin(update, user_id):
+async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """Check if user is group admin"""
     try:
         chat_id = update.effective_chat.id
         cache_key = f"{chat_id}_{user_id}"
-        current_time = time.time()
+        current_time = asyncio.get_event_loop().time()
         
         # Check cache
         if cache_key in admin_cache:
@@ -135,8 +118,8 @@ def is_admin(update, user_id):
                 return is_admin_cached
         
         # Get user permissions
-        member = update.message.bot.get_chat_member(chat_id, user_id)
-        is_admin_result = member.status in [ChatMember.ADMINISTRATOR, ChatMember.OWNER]
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        is_admin_result = member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
         
         # Update cache
         admin_cache[cache_key] = (current_time, is_admin_result)
@@ -149,14 +132,14 @@ def is_admin(update, user_id):
 
 def admin_required(func):
     """Admin permission decorator"""
-    def wrapper(update, context):
-        if is_admin(update, update.effective_user.id):
-            return func(update, context)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if await is_admin(update, context, update.effective_user.id):
+            return await func(update, context)
         else:
-            update.message.reply_text("❌ This command is only for group admins")
+            await update.message.reply_text("❌ This command is only for group admins")
     return wrapper
 
-def start(update, context):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command"""
     welcome_text = """🤖 Anti-spam bot started!
 
@@ -173,41 +156,41 @@ def start(update, context):
 💡 Usage:
 Please ensure bot has delete message admin permissions"""
     
-    update.message.reply_text(welcome_text)
+    await update.message.reply_text(welcome_text)
 
 @admin_required
-def add_keyword_command(update, context):
+async def add_keyword_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add keyword command"""
     if not context.args:
-        update.message.reply_text("❌ Please provide keyword to add\nUsage: /add <keyword>")
+        await update.message.reply_text("❌ Please provide keyword to add\nUsage: /add <keyword>")
         return
     
     keyword = ' '.join(context.args)
     if bot_instance.add_keyword(keyword):
-        update.message.reply_text(f"✅ Added keyword: {keyword}")
+        await update.message.reply_text(f"✅ Added keyword: {keyword}")
     else:
-        update.message.reply_text(f"❌ Keyword already exists: {keyword}")
+        await update.message.reply_text(f"❌ Keyword already exists: {keyword}")
 
 @admin_required  
-def delete_keyword_command(update, context):
+async def delete_keyword_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Delete keyword command"""
     if not context.args:
-        update.message.reply_text("❌ Please provide keyword to delete\nUsage: /delete <keyword>")
+        await update.message.reply_text("❌ Please provide keyword to delete\nUsage: /delete <keyword>")
         return
     
     keyword = ' '.join(context.args)
     if bot_instance.remove_keyword(keyword):
-        update.message.reply_text(f"✅ Deleted keyword: {keyword}")
+        await update.message.reply_text(f"✅ Deleted keyword: {keyword}")
     else:
-        update.message.reply_text(f"❌ Keyword not found: {keyword}")
+        await update.message.reply_text(f"❌ Keyword not found: {keyword}")
 
 @admin_required
-def list_keywords_command(update, context):
+async def list_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """List all keywords command"""
     keywords_data = bot_instance.keywords_data
     
     if not any(keywords_data.values()):
-        update.message.reply_text("📝 Keyword list is empty")
+        await update.message.reply_text("📝 Keyword list is empty")
         return
     
     message_parts = ["📝 Current keyword list:\n"]
@@ -231,10 +214,10 @@ def list_keywords_command(update, context):
     if len(response) > 4000:
         response = response[:4000] + "\n\n... (message too long, truncated)"
     
-    update.message.reply_text(response)
+    await update.message.reply_text(response)
 
 @admin_required
-def stats_command(update, context):
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Statistics command"""
     keywords_data = bot_instance.keywords_data
     total_keywords = sum(len(keywords) for keywords in keywords_data.values())
@@ -249,15 +232,15 @@ def stats_command(update, context):
 📅 Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 🟢 Status: Running normally"""
     
-    update.message.reply_text(stats_text)
+    await update.message.reply_text(stats_text)
 
-def message_handler(update, context):
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Message handler - check for spam"""
     if not update.message or not update.message.text:
         return
     
     # Ignore group admin messages
-    if is_admin(update, update.effective_user.id):
+    if await is_admin(update, context, update.effective_user.id):
         return
     
     message_text = update.message.text
@@ -266,30 +249,27 @@ def message_handler(update, context):
     if is_spam:
         try:
             # Delete spam message
-            update.message.delete()
+            await update.message.delete()
             
             # Send notification
             chat = update.effective_chat
-            warning_msg = chat.send_message(f"🗑️ Deleted spam message (matched: {matched_keyword})")
+            warning_msg = await chat.send_message(f"🗑️ Deleted spam message (matched: {matched_keyword})")
             
             # Delete warning message after 5 seconds
-            def delete_warning():
-                time.sleep(5)
-                try:
-                    warning_msg.delete()
-                except:
-                    pass
-            
-            threading.Thread(target=delete_warning, daemon=True).start()
+            await asyncio.sleep(5)
+            try:
+                await warning_msg.delete()
+            except:
+                pass
                 
             logger.info(f"Deleted spam message: {message_text[:50]}... (matched: {matched_keyword})")
             
         except Exception as e:
             logger.error(f"Failed to delete message: {e}")
 
-def health_check(update, context):
+async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Health check endpoint"""
-    update.message.reply_text("🟢 Bot running normally")
+    await update.message.reply_text("🟢 Bot running normally")
 
 def main():
     """Main function"""
@@ -298,33 +278,28 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN environment variable not found")
         return
     
-    try:
-        updater = Updater(token=token, use_context=True)
-        dispatcher = updater.dispatcher
-        
-        # Add command handlers
-        dispatcher.add_handler(CommandHandler("start", start))
-        dispatcher.add_handler(CommandHandler("add", add_keyword_command))
-        dispatcher.add_handler(CommandHandler("delete", delete_keyword_command))
-        dispatcher.add_handler(CommandHandler("list", list_keywords_command))
-        dispatcher.add_handler(CommandHandler("stats", stats_command))
-        dispatcher.add_handler(CommandHandler("health", health_check))
-        
-        # Add message handler
-        dispatcher.add_handler(MessageHandler(
-            Filters.text & Filters.chat_type.groups,
-            message_handler
-        ))
-        
-        logger.info("🤖 Anti-spam bot started successfully!")
-        logger.info(f"📝 Current total keywords: {sum(len(keywords) for keywords in bot_instance.keywords_data.values())}")
-        
-        updater.start_polling()
-        updater.idle()
-        
-    except Exception as e:
-        logger.error(f"Bot startup failed: {e}")
-        raise
+    # Create application
+    application = Application.builder().token(token).build()
+    
+    # Add command handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("add", add_keyword_command))
+    application.add_handler(CommandHandler("delete", delete_keyword_command))
+    application.add_handler(CommandHandler("list", list_keywords_command))
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("health", health_check))
+    
+    # Add message handler
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.ChatType.GROUPS,
+        message_handler
+    ))
+    
+    logger.info("🤖 Anti-spam bot started successfully!")
+    logger.info(f"📝 Current total keywords: {sum(len(keywords) for keywords in bot_instance.keywords_data.values())}")
+    
+    # Run the bot
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
