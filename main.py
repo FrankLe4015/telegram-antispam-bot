@@ -6,6 +6,29 @@ import json
 import logging
 import asyncio
 from datetime import datetime
+
+# 手动创建 imghdr 模块来解决依赖问题
+import sys
+import types
+
+def create_imghdr_module():
+    """手动创建 imghdr 模块"""
+    imghdr = types.ModuleType('imghdr')
+    
+    def what(file, h=None):
+        """返回 None，满足基本接口需求"""
+        return None
+    
+    imghdr.what = what
+    sys.modules['imghdr'] = imghdr
+    return imghdr
+
+# 确保 imghdr 模块存在
+try:
+    import imghdr
+except ImportError:
+    imghdr = create_imghdr_module()
+
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ChatMemberStatus
