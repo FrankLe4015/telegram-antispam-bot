@@ -5,11 +5,13 @@ import os
 import json
 import re
 import logging
-import asyncio
-import aiohttp
+import time
+import threading
 from datetime import datetime
+
+# 使用稳定的旧版本API
 from telegram import Update, ChatMember
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
 # 配置日志
 logging.basicConfig(
@@ -20,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 # 关键词数据文件
 KEYWORDS_FILE = 'keywords.json'
-ADMIN_CACHE_FILE = 'admin_cache.json'
 
 # 管理员缓存（5分钟有效期）
 admin_cache = {}
@@ -42,20 +43,16 @@ class AntiSpamBot:
         # 默认关键词
         return {
             "gambling": [
-                r"(?i)(赌博|博彩|百家乐|德州扑克|老虎机|骰宝)",
-                r"(?i)(充值|提现|返水|洗码|上分|下分)",
-                r"(?i)(AG亚游|BBIN|沙巴|皇冠|永利|威尼斯)",
-                r"(?i)(du.*bo|b[o0].*c[a@]i)",
-                r"(?i)(一夜暴富|稳赚不赔|日赚千元)",
-                r"(?i)(网投|网赌|线上.*casino)",
+                "赌博", "博彩", "百家乐", "德州扑克", "老虎机", "骰宝",
+                "充值", "提现", "返水", "洗码", "上分", "下分",
+                "AG亚游", "BBIN", "沙巴", "皇冠", "永利", "威尼斯",
+                "一夜暴富", "稳赚不赔", "日赚千元", "网投", "网赌",
             ],
             "adult": [
-                r"(?i)(约炮|援交|包养|小姐|嫖娼)",
-                r"(?i)(黄色|成人|情色|三级|av)",
-                r"(?i)(性服务|上门服务|特殊服务)",
-                r"(?i)(一夜情|找乐子|寂寞)",
-                r"[🍑🍒🔞🍆💦]",
-                r"(?i)(porn|sex|adult)",
+                "约炮", "援交", "包养", "小姐", "嫖娼",
+                "黄色", "成人", "情色", "三级", "av",
+                "性服务", "上门服务", "特殊服务",
+                "一夜情", "找乐子", "寂寞",
             ],
             "custom": []
         }
@@ -100,28 +97,23 @@ class AntiSpamBot:
         if not text:
             return False, None
             
-        text = text.strip()
+        text = text.strip().lower()
         all_keywords = self.get_all_keywords()
         
         for keyword in all_keywords:
-            try:
-                if re.search(keyword, text):
-                    return True, keyword
-            except re.error:
-                # 如果正则表达式有错误，尝试普通字符串匹配
-                if keyword.lower() in text.lower():
-                    return True, keyword
+            if keyword.lower() in text:
+                return True, keyword
         return False, None
 
 # 创建全局bot实例
 bot_instance = AntiSpamBot()
 
-async def is_admin(update: Update, user_id: int) -> bool:
+def is_admin(update: Update, user_id: int) -> bool:
     """检查用户是否为群组管理员（带缓存）"""
     try:
         chat_id = update.effective_chat.id
         cache_key = f"{chat_id}_{user_id}"
-        current_time = asyncio.get_event_loop().time()
+        current_time = time.time()
         
         # 检查缓存
         if cache_key in admin_cache:
@@ -130,7 +122,7 @@ async def is_admin(update: Update, user_id: int) -> bool:
                 return is_admin_cached
         
         # 获取用户权限
-        member = await update.get_bot().get_chat_member(chat_id, user_id)
+        member = update.message.bot.get_chat_member(chat_id, user_id)
         is_admin_result = member.status in [ChatMember.ADMINISTRATOR, ChatMember.OWNER]
         
         # 更新缓存
@@ -144,70 +136,68 @@ async def is_admin(update: Update, user_id: int) -> bool:
 
 def admin_required(func):
     """管理员权限装饰器"""
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if await is_admin(update, update.effective_user.id):
-            return await func(update, context)
+    def wrapper(update: Update, context: CallbackContext):
+        if is_admin(update, update.effective_user.id):
+            return func(update, context)
         else:
-            await update.message.reply_text("❌ 此命令仅限群组管理员使用")
+            update.message.reply_text("❌ 此命令仅限群组管理员使用")
     return wrapper
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def start(update: Update, context: CallbackContext):
     """启动命令"""
-    welcome_text = """
-🤖 反垃圾机器人已启动！
+    welcome_text = """🤖 反垃圾机器人已启动！
 
 📝 管理员命令：
-• `/add <关键词>` - 添加关键词
-• `/delete <关键词>` - 删除关键词  
-• `/list` - 查看关键词列表
-• `/stats` - 查看统计信息
+• /add <关键词> - 添加关键词
+• /delete <关键词> - 删除关键词  
+• /list - 查看关键词列表
+• /stats - 查看统计信息
 
 ⚡ 功能：
 • 自动检测并删除垃圾/广告信息
 • 支持博彩、色情内容过滤
-• 支持正则表达式匹配
 
 💡 使用说明：
-请确保机器人有删除消息的管理员权限
-"""
-    await update.message.reply_text(welcome_text)
+请确保机器人有删除消息的管理员权限"""
+    
+    update.message.reply_text(welcome_text)
 
 @admin_required
-async def add_keyword_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def add_keyword_command(update: Update, context: CallbackContext):
     """添加关键词命令"""
     if not context.args:
-        await update.message.reply_text("❌ 请提供要添加的关键词\n用法: /add <关键词>")
+        update.message.reply_text("❌ 请提供要添加的关键词\n用法: /add <关键词>")
         return
     
     keyword = ' '.join(context.args)
     if bot_instance.add_keyword(keyword):
-        await update.message.reply_text(f"✅ 已添加关键词: `{keyword}`", parse_mode='Markdown')
+        update.message.reply_text(f"✅ 已添加关键词: {keyword}")
     else:
-        await update.message.reply_text(f"❌ 关键词已存在: `{keyword}`", parse_mode='Markdown')
+        update.message.reply_text(f"❌ 关键词已存在: {keyword}")
 
 @admin_required  
-async def delete_keyword_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def delete_keyword_command(update: Update, context: CallbackContext):
     """删除关键词命令"""
     if not context.args:
-        await update.message.reply_text("❌ 请提供要删除的关键词\n用法: /delete <关键词>")
+        update.message.reply_text("❌ 请提供要删除的关键词\n用法: /delete <关键词>")
         return
     
     keyword = ' '.join(context.args)
     if bot_instance.remove_keyword(keyword):
-        await update.message.reply_text(f"✅ 已删除关键词: `{keyword}`", parse_mode='Markdown')
+        update.message.reply_text(f"✅ 已删除关键词: {keyword}")
     else:
-        await update.message.reply_text(f"❌ 未找到关键词: `{keyword}`", parse_mode='Markdown')
+        update.message.reply_text(f"❌ 未找到关键词: {keyword}")
 
 @admin_required
-async def list_keywords_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def list_keywords_command(update: Update, context: CallbackContext):
     """列出所有关键词命令"""
     keywords_data = bot_instance.keywords_data
     
     if not any(keywords_data.values()):
-        await update.message.reply_text("📝 关键词列表为空")
+        update.message.reply_text("📝 关键词列表为空")
         return
     
-    message_parts = ["📝 **当前关键词列表:**\n"]
+    message_parts = ["📝 当前关键词列表:\n"]
     
     for category, keywords in keywords_data.items():
         if keywords:
@@ -219,7 +209,7 @@ async def list_keywords_command(update: Update, context: ContextTypes.DEFAULT_TY
             
             message_parts.append(f"\n{category_name}:")
             for i, keyword in enumerate(keywords[:10], 1):  # 限制显示前10个
-                message_parts.append(f"{i}. `{keyword}`")
+                message_parts.append(f"{i}. {keyword}")
             
             if len(keywords) > 10:
                 message_parts.append(f"... 还有{len(keywords) - 10}个关键词")
@@ -228,33 +218,32 @@ async def list_keywords_command(update: Update, context: ContextTypes.DEFAULT_TY
     if len(response) > 4000:  # Telegram消息长度限制
         response = response[:4000] + "\n\n... (消息过长，已截断)"
     
-    await update.message.reply_text(response, parse_mode='Markdown')
+    update.message.reply_text(response)
 
 @admin_required
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def stats_command(update: Update, context: CallbackContext):
     """统计信息命令"""
     keywords_data = bot_instance.keywords_data
     total_keywords = sum(len(keywords) for keywords in keywords_data.values())
     
-    stats_text = f"""
-📊 **机器人统计信息**
+    stats_text = f"""📊 机器人统计信息
 
 🔢 关键词总数: {total_keywords}
 • 🎰 博彩类: {len(keywords_data.get('gambling', []))}
 • 🔞 成人类: {len(keywords_data.get('adult', []))}  
 • ⚙️ 自定义: {len(keywords_data.get('custom', []))}
 
-📅 最后更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
-    await update.message.reply_text(stats_text, parse_mode='Markdown')
+📅 最后更新: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"""
+    
+    update.message.reply_text(stats_text)
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def message_handler(update: Update, context: CallbackContext):
     """消息处理器 - 检查垃圾信息"""
     if not update.message or not update.message.text:
         return
     
     # 忽略群组管理员的消息
-    if await is_admin(update, update.effective_user.id):
+    if is_admin(update, update.effective_user.id):
         return
     
     message_text = update.message.text
@@ -263,44 +252,45 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_spam:
         try:
             # 删除垃圾消息
-            await update.message.delete()
+            update.message.delete()
             
-            # 发送通知（可选，会自动删除）
-            warning_msg = await update.effective_chat.send_message(
-                f"🗑️ 已删除垃圾信息 (匹配: `{matched_keyword}`)",
-                parse_mode='Markdown'
-            )
+            # 发送通知（可选）
+            chat = update.effective_chat
+            warning_msg = chat.send_message(f"🗑️ 已删除垃圾信息 (匹配: {matched_keyword})")
             
             # 5秒后删除警告消息
-            await asyncio.sleep(5)
-            try:
-                await warning_msg.delete()
-            except:
-                pass
+            def delete_warning():
+                time.sleep(5)
+                try:
+                    warning_msg.delete()
+                except:
+                    pass
+            
+            threading.Thread(target=delete_warning, daemon=True).start()
                 
             logger.info(f"删除垃圾消息: {message_text[:50]}... (匹配: {matched_keyword})")
             
         except Exception as e:
             logger.error(f"删除消息失败: {e}")
 
-async def keep_alive():
+def health_check(update: Update, context: CallbackContext):
+    """健康检查端点"""
+    update.message.reply_text("🟢 Bot运行正常")
+
+def keep_alive():
     """保持服务活跃"""
+    import requests
     while True:
         try:
             # 如果有RENDER_EXTERNAL_URL环境变量，ping自己
             external_url = os.getenv('RENDER_EXTERNAL_URL')
             if external_url:
-                async with aiohttp.ClientSession() as session:
-                    await session.get(f"{external_url}/health", timeout=10)
-                    logger.info("Keep alive ping sent")
+                requests.get(f"{external_url}/health", timeout=10)
+                logger.info("Keep alive ping sent")
         except Exception as e:
             logger.error(f"Keep alive failed: {e}")
         
-        await asyncio.sleep(600)  # 10分钟ping一次
-
-async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """健康检查端点"""
-    await update.message.reply_text("🟢 Bot运行正常")
+        time.sleep(600)  # 10分钟ping一次
 
 def main():
     """主函数"""
@@ -310,30 +300,32 @@ def main():
         logger.error("未找到TELEGRAM_BOT_TOKEN环境变量")
         return
     
-    # 创建应用
-    application = Application.builder().token(token).build()
+    # 创建Updater
+    updater = Updater(token=token, use_context=True)
+    dispatcher = updater.dispatcher
     
     # 添加命令处理器
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("add", add_keyword_command))
-    application.add_handler(CommandHandler("delete", delete_keyword_command))
-    application.add_handler(CommandHandler("list", list_keywords_command))
-    application.add_handler(CommandHandler("stats", stats_command))
-    application.add_handler(CommandHandler("health", health_check))
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(CommandHandler("add", add_keyword_command))
+    dispatcher.add_handler(CommandHandler("delete", delete_keyword_command))
+    dispatcher.add_handler(CommandHandler("list", list_keywords_command))
+    dispatcher.add_handler(CommandHandler("stats", stats_command))
+    dispatcher.add_handler(CommandHandler("health", health_check))
     
     # 添加消息处理器（仅群组消息）
-    application.add_handler(MessageHandler(
-        filters.TEXT & filters.ChatType.GROUPS, 
+    dispatcher.add_handler(MessageHandler(
+        Filters.text & Filters.chat_type.groups,
         message_handler
     ))
     
     # 启动keep alive任务
-    loop = asyncio.get_event_loop()
-    loop.create_task(keep_alive())
+    keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+    keep_alive_thread.start()
     
     # 启动Bot
     logger.info("Bot启动中...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    updater.start_polling()
+    updater.idle()
 
 if __name__ == '__main__':
     main()
