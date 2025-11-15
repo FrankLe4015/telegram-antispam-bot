@@ -6,6 +6,8 @@ import json
 import logging
 import asyncio
 import threading
+import time
+import requests
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -60,6 +62,28 @@ def start_http_server():
     server = HTTPServer(('0.0.0.0', port), HealthHandler)
     logger.info(f"HTTP server started on port {port}")
     server.serve_forever()
+
+def keep_alive():
+    """Keep the service alive by pinging itself every 10 minutes"""
+    # Get the service URL from environment or construct it
+    service_url = os.environ.get('RENDER_EXTERNAL_URL', 'https://telegram-antispam-bot-7ewc.onrender.com')
+    
+    while True:
+        try:
+            time.sleep(600)  # Wait 10 minutes
+            response = requests.get(service_url, timeout=30)
+            if response.status_code == 200:
+                logger.info("✅ Keep-alive ping successful")
+            else:
+                logger.warning(f"⚠️ Keep-alive ping returned status {response.status_code}")
+        except Exception as e:
+            logger.error(f"❌ Keep-alive ping failed: {e}")
+
+def start_keep_alive():
+    """Start keep-alive in a separate thread"""
+    keep_alive_thread = threading.Thread(target=keep_alive, daemon=True)
+    keep_alive_thread.start()
+    logger.info("🔄 Keep-alive service started")
 
 # Keywords data file
 KEYWORDS_FILE = 'keywords.json'
@@ -330,6 +354,9 @@ def main():
     # Start HTTP server in a separate thread for Render health checks
     http_thread = threading.Thread(target=start_http_server, daemon=True)
     http_thread.start()
+    
+    # Start keep-alive service to prevent Render from sleeping
+    start_keep_alive()
     
     # Create application
     application = Application.builder().token(token).build()
