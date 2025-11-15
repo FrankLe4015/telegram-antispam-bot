@@ -7,7 +7,8 @@ import logging
 import asyncio
 import threading
 import time
-import requests
+import urllib.request
+import urllib.error
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -71,11 +72,13 @@ def keep_alive():
     while True:
         try:
             time.sleep(600)  # Wait 10 minutes
-            response = requests.get(service_url, timeout=30)
-            if response.status_code == 200:
-                logger.info("✅ Keep-alive ping successful")
-            else:
-                logger.warning(f"⚠️ Keep-alive ping returned status {response.status_code}")
+            with urllib.request.urlopen(service_url, timeout=30) as response:
+                if response.getcode() == 200:
+                    logger.info("✅ Keep-alive ping successful")
+                else:
+                    logger.warning(f"⚠️ Keep-alive ping returned status {response.getcode()}")
+        except urllib.error.URLError as e:
+            logger.error(f"❌ Keep-alive ping failed: {e}")
         except Exception as e:
             logger.error(f"❌ Keep-alive ping failed: {e}")
 
