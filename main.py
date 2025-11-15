@@ -5,7 +5,9 @@ import os
 import json
 import logging
 import asyncio
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # 手动创建 imghdr 模块来解决依赖问题
 import sys
@@ -39,6 +41,25 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Simple HTTP handler for health checks
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'Bot is running!')
+    
+    def log_message(self, format, *args):
+        # Suppress HTTP request logs
+        pass
+
+def start_http_server():
+    """Start HTTP server for Render health checks"""
+    port = int(os.environ.get('PORT', 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    logger.info(f"HTTP server started on port {port}")
+    server.serve_forever()
 
 # Keywords data file
 KEYWORDS_FILE = 'keywords.json'
@@ -305,6 +326,10 @@ def main():
     if not token:
         logger.error("TELEGRAM_BOT_TOKEN environment variable not found")
         return
+    
+    # Start HTTP server in a separate thread for Render health checks
+    http_thread = threading.Thread(target=start_http_server, daemon=True)
+    http_thread.start()
     
     # Create application
     application = Application.builder().token(token).build()
